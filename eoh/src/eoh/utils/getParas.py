@@ -42,7 +42,7 @@ class Paras():
         #####################
         ###  Evaluation settings  ###
         #####################
-        self.eva_timeout = 3000
+        self.eva_timeout = 300
         self.eva_numba_decorator = False
 
 
