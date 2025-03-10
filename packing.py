@@ -6,6 +6,8 @@ from typing import List, Tuple
 import traceback
 from tqdm import tqdm
 import line_profiler
+
+
 class Truck:
     """Represents a truck with its specifications."""
 
@@ -103,6 +105,8 @@ class GetData:
             instance_data.append((items, truck_types))  # Include generated truck types
 
         return instance_data
+
+
 class GetPrompts:
     def __init__(self):
         self.prompt_task = (
@@ -167,7 +171,7 @@ Design a novel algorithm to select the next item, truck and its placement to ens
         'x', 'y', and 'z' are floats representing the coordinates of the bottom-left-front corner of the item within the truck.
         'truck_type_index' is an integer representing the index of the truck type in the `truck_types` list to use if a new truck is needed (i.e., if `truck_index` is -1).
         """
-        self.prompt_other_inf = "Use NumPy arrays where appropriate. Make sure all return values is defined before returning them. The algorithm should be fast and efficient, since it will be evaluated on instance with hundreds of items."
+        self.prompt_other_inf = "Use NumPy arrays where appropriate. Ensure that all return values are defined before returning them. The algorithm will be evaluated on instances with hundreds of items and a few truck types, which means that the 'occupied_volumes' in `trucks_in_use` will contain large numbers of entries. Consider implementing an efficient search for available space, weight load calculations, and placement validation to handle such large inputs efficiently."
 
     def get_task(self):
         return self.prompt_task
@@ -275,10 +279,11 @@ class PackingCONST:
         """Checks if an item meets the 80% support constraint."""
         supported_area = self.calculate_support(truck, item)
         return supported_area >= 0.8 * item.bottom_area
+
     @line_profiler.profile
-    def greedy(self, eva):
+    def greedy(self, place_item):
         all_plans = []  # List to store the plans for each instance data
-        for items, truck_types in tqdm(self.instance_data):
+        for items, truck_types in self.instance_data:
             trucks_in_use = []
             unplaced_items_indices = list(range(len(items)))
             item_total_volume = sum(
@@ -286,7 +291,7 @@ class PackingCONST:
             )
             item_total_weight = sum([item.weight for item in items])
             plan = []  # Plan for this specific instance
-
+            pbar = tqdm(total=len(unplaced_items_indices))
             while unplaced_items_indices:
                 try:
                     unplaced_items_data = []
@@ -325,7 +330,7 @@ class PackingCONST:
                             }
                         )
 
-                    truck_index, item_index, x, y, z, truck_type_index = eva.place_item(
+                    truck_index, item_index, x, y, z, truck_type_index = place_item(
                         unplaced_items_data, trucks_in_use_data, truck_types
                     )
                     # --- Input Validation ---
@@ -402,6 +407,7 @@ class PackingCONST:
                             "truck_type_index": truck_type_index,
                         }
                     )
+                    pbar.update(1)
 
                 except Exception as e:
                     print("An error occurred:", str(e))
@@ -426,7 +432,7 @@ class PackingCONST:
                 packing_module = types.ModuleType("packing_module")
                 exec(code_string, packing_module.__dict__)
                 sys.modules[packing_module.__name__] = packing_module
-                fitness = self.greedy(packing_module)
+                fitness = self.greedy(packing_module.place_item)
                 if fitness is not None:
                     fitness, all_plans = fitness
                 return fitness
