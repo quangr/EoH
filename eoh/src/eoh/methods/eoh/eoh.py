@@ -152,7 +152,6 @@ class EOH:
                 # populatin management
                 size_act = min(len(population), self.pop_size)
                 population = self.manage.population_management(population, size_act)
-                print()
 
 
             # Save population to a file

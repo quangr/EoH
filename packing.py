@@ -68,47 +68,180 @@ import json
 
 
 class GetData:
-    def __init__(self, n_instance, n_items, n_truck_types):  # Changed to n_truck_types
+    def __init__(self, n_instance):
         self.n_instance = n_instance
-        self.n_items = n_items
-        self.n_truck_types = n_truck_types  # Store the number of truck types
+        self.all_items = []
+        # Stores tuples: (maxLoad, length, width, height) for each truck type encountered
+        self.all_truck_types_properties = []
 
     def generate_instances(self):
+        """
+        Reads data from JSON files, extracts items and truck types,
+        and stores them in internal lists for later analysis.
+        Returns instance-specific data as before.
+        """
         files = glob.glob("data/train/*")
         instance_data = []
-        for file in files[:5]:
-            with open(file, "r") as f:
-                data = json.load(f)
+        processed_count = 0
+        # Process up to n_instance files or all if less than n_instance
+        files_to_process = files[: self.n_instance]  # Use the n_instance attribute
 
-            # Extract truck types
-            truck_type_map = data.get("algorithmBaseParamDto", {}).get(
-                "truckTypeMap", {}
-            )
-            truck_types = []
-            for truck_id, truck in truck_type_map.items():
-                truck_types.append(
-                    (truck["maxLoad"], truck["length"], truck["width"], truck["height"])
+        if not files_to_process:
+            print("No files found in data/train/. Cannot generate instances.")
+            return []  # Return empty list if no files
+
+        for file in files_to_process:
+            try:
+                with open(file, "r") as f:
+                    data = json.load(f)
+
+                # Extract truck types
+                truck_type_map = data.get("algorithmBaseParamDto", {}).get(
+                    "truckTypeMap", {}
                 )
-            items = []
-            # Extract items (boxes)
-            boxes = data.get("boxes", [])
-            for i, box in enumerate(boxes):
-                items.append(
-                    Item(
+                current_instance_truck_types = []
+                for truck_id, truck in truck_type_map.items():
+                    # Extract properties, using .get with default 0 in case keys are missing
+                    max_load = truck.get("maxLoad", 0)
+                    length = truck.get("length", 0)
+                    width = truck.get("width", 0)
+                    height = truck.get("height", 0)
+                    truck_props = (max_load, length, width, height)
+                    current_instance_truck_types.append(truck_props)
+                    # Add to the aggregated list
+                    self.all_truck_types_properties.append(truck_props)
+
+                # Extract items (boxes)
+                current_instance_items = []
+                boxes = data.get("boxes", [])
+                boxes_to_process = boxes
+
+                for i, box in enumerate(boxes_to_process):
+                    # Extract properties, using .get with default 0
+                    item = Item(
                         str(i),
-                        box["length"],
-                        box["width"],
-                        box["height"],
-                        box["weight"],
+                        box.get("length", 0),
+                        box.get("width", 0),
+                        box.get("height", 0),
+                        box.get("weight", 0),
                     )
-                )
-            instance_data.append((items, truck_types))  # Include generated truck types
+                    current_instance_items.append(item)
+                    # Add to the aggregated list
+                    self.all_items.append(item)
 
+                instance_data.append(
+                    (current_instance_items, current_instance_truck_types)
+                )
+                processed_count += 1
+
+            except Exception as e:
+                print(f"Error processing file {file}: {e}")
+                continue  # Skip to the next file
+
+        print(
+            f"Successfully processed {processed_count} files out of {len(files_to_process)} requested."
+        )
+        print(
+            f"Aggregated {len(self.all_items)} items and {len(self.all_truck_types_properties)} truck type properties across files."
+        )
         return instance_data
+
+    def _calculate_percentiles_string(self, data_list, property_name):
+        """Helper to calculate and format percentile string for a given list."""
+        if not data_list:
+            return f"  - {property_name}: No data available."
+
+        try:
+            percentiles = np.percentile(data_list, [0, 25, 50, 75, 100])
+            p0, p25, p50, p75, p100 = percentiles
+
+            # Determine format: integer or float
+            # Check if all values in the *original* list are integers and if the calculated percentiles are also close to integers
+            # This helps decide whether to show .00 or not.
+            is_integer_data = all(isinstance(x, int) for x in data_list)
+            is_integer_percentiles = all(abs(p - round(p)) < 1e-9 for p in percentiles)
+
+            fmt = "{:.0f}" if is_integer_data and is_integer_percentiles else "{:.2f}"
+
+            return (
+                f"  - {property_name}: "
+                f"Min={fmt.format(p0)}, "
+                f"25th={fmt.format(p25)}, "
+                f"Median={fmt.format(p50)}, "
+                f"75th={fmt.format(p75)}, "
+                f"Max={fmt.format(p100)}. "
+            )
+        except Exception as e:
+            return f"  - {property_name}: Error calculating percentiles - {e}"
+
+    def generate_percentile_prompt(self):
+        """
+        Generates a text prompt summarizing the percentile distribution
+        of item and truck properties based on aggregated data.
+        Requires generate_instances() to have been called first.
+        """
+
+        if not self.all_items and not self.all_truck_types_properties:
+            return "No data loaded. Please run generate_instances() first to populate data."
+
+        prompt_parts = ["Data Distribution Summary:"]
+
+        # --- Item Properties ---
+        prompt_parts.append("\nItem Properties:")
+        if not self.all_items:
+            prompt_parts.append("  No item data available.")
+        else:
+            # Extract all values for each property
+            item_lengths = [item.length for item in self.all_items]
+            item_widths = [item.width for item in self.all_items]
+            item_heights = [item.height for item in self.all_items]
+            item_weights = [item.weight for item in self.all_items]
+
+            # Calculate and format percentile strings using the helper
+            prompt_parts.append(
+                self._calculate_percentiles_string(item_lengths, "Length")
+            )
+            prompt_parts.append(
+                self._calculate_percentiles_string(item_widths, "Width")
+            )
+            prompt_parts.append(
+                self._calculate_percentiles_string(item_heights, "Height")
+            )
+            # Assuming weight might have units like kg
+            prompt_parts.append(
+                self._calculate_percentiles_string(item_weights, "Weight")
+            )
+
+        # --- Truck Properties ---
+        prompt_parts.append("\nTruck Properties:")
+        if not self.all_truck_types_properties:
+            prompt_parts.append("  No truck type data available.")
+        else:
+            # self.all_truck_types_properties contains tuples (maxLoad, length, width, height)
+            truck_maxloads = [t[0] for t in self.all_truck_types_properties]
+            truck_lengths = [t[1] for t in self.all_truck_types_properties]
+            truck_widths = [t[2] for t in self.all_truck_types_properties]
+            truck_heights = [t[3] for t in self.all_truck_types_properties]
+
+            # Calculate and format percentile strings using the helper
+            # Assuming maxLoad might have units like kg
+            prompt_parts.append(
+                self._calculate_percentiles_string(truck_maxloads, "Max Load")
+            )
+            prompt_parts.append(
+                self._calculate_percentiles_string(truck_lengths, "Length")
+            )
+            prompt_parts.append(
+                self._calculate_percentiles_string(truck_widths, "Width")
+            )
+            prompt_parts.append(
+                self._calculate_percentiles_string(truck_heights, "Height")
+            )
+        return "\n".join(prompt_parts)
 
 
 class GetPrompts:
-    def __init__(self):
+    def __init__(self, data_distribution=""):
         self.prompt_task = (
             "Given a list of items with their dimensions and weights, and a list of truck types with their dimensions and weight capacities, \
 you need to place all items into the trucks without overlapping, minimizing the number of trucks used. \
@@ -128,6 +261,8 @@ Design a novel algorithm to select the next item, truck and its placement to ens
         10. **Item Selection:** The `item_index` must be a valid index within the `unplaced_items` list.
         11. **Coordinate System**: The coordinate system's origin (0,0,0) is at the bottom-left-front corner of the truck.  'x' increases along the length, 'y' along the width, and 'z' along the height.
         """
+            + "\n"
+            + data_distribution
         )
         self.prompt_func_name = "place_item"
         self.prompt_func_inputs = ["unplaced_items", "trucks_in_use", "truck_types"]
@@ -194,16 +329,12 @@ Design a novel algorithm to select the next item, truck and its placement to ens
 
 class PackingCONST:
     def __init__(self):
-        self.n_items = 20  # Number of items per instance
-        self.n_truck_types = 3  # Number of truck types
         self.n_instance = 5
         self.running_time = 10
 
-        self.prompts = GetPrompts()
-        getData = GetData(
-            self.n_instance, self.n_items, self.n_truck_types
-        )  # Pass n_truck_types
+        getData = GetData(self.n_instance)  # Pass n_truck_types
         self.instance_data = getData.generate_instances()
+        self.prompts = GetPrompts(getData.generate_percentile_prompt())
 
     def _check_overlap(self, item1: Item, item2: Item) -> bool:
         """Checks if two items overlap in 3D space."""
