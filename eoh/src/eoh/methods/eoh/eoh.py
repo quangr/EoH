@@ -114,18 +114,7 @@ class EOH:
             else:  # create new population
                 print("creating initial population:")
                 population = interface_ec.population_generation()
-                population = self.manage.population_management(population, self.pop_size)
-
-                # print(len(population))
-                # if len(population)<self.pop_size:
-                #     for op in [self.operators[0],self.operators[2]]:
-                #         _,new_ind = interface_ec.get_algorithm(population, op)
-                #         self.add2pop(population, new_ind)
-                #         population = self.manage.population_management(population, self.pop_size)
-                #         if len(population) >= self.pop_size:
-                #             break
-                #         print(len(population))
-     
+                population = self.manage.population_management(population, self.pop_size)    
                 
                 print(f"Pop initial: ")
                 for off in population:

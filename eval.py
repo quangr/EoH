@@ -9,8 +9,165 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import numpy as np
 import copy
 
-example_code = "import numpy as np\n\ndef place_item(unplaced_items, trucks_in_use, truck_types):\n    \"\"\"{This algorithm prioritizes filling existing trucks by selecting the item that best fits the available space in a truck, considering both volume and weight, and only opens a new truck when necessary.}\"\"\"\n    truck_index = -1\n    item_index = -1\n    x = 0.0\n    y = 0.0\n    z = 0.0\n    truck_type_index = -1\n\n    best_item_index = -1\n    best_truck_index = -1\n    best_x = -1\n    best_y = -1\n    best_z = -1\n    best_fit_score = float('inf')\n\n    # Iterate through existing trucks\n    for t_idx, truck in enumerate(trucks_in_use):\n        truck_type_index_local = truck['truck_type_index']\n        truck_capacity, truck_length, truck_width, truck_height = truck_types[truck_type_index_local]\n        current_weight = truck['current_weight']\n\n        # Iterate through unplaced items\n        for i_idx, item in enumerate(unplaced_items):\n            item_length = item['length']\n            item_width = item['width']\n            item_height = item['height']\n            item_weight = item['weight']\n\n            if current_weight + item_weight > truck_capacity:\n                continue\n\n            # Calculate occupied volume\n            occupied_volume = 0\n            for placed_item in truck['occupied_volumes']:\n                occupied_volume += placed_item[4] * placed_item[5] * placed_item[6]\n            remaining_volume = truck_length * truck_width * truck_height - occupied_volume\n\n            # Find a valid placement\n            for cur_z in sorted(list({0.0} | {vol[3] + vol[6] for vol in truck['occupied_volumes']})):\n                for cur_x in sorted(list({0.0} | {vol[1] + vol[4] for vol in truck['occupied_volumes']})):\n                    for cur_y in sorted(list({0.0} | {vol[2] + vol[5] for vol in truck['occupied_volumes']})):\n\n                        if (cur_x >= 0 and cur_x + item_length <= truck_length and\n                            cur_y >= 0 and cur_y + item_width <= truck_width and\n                            cur_z >= 0 and cur_z + item_height <= truck_height):\n\n                            overlap = False\n                            for occupied_item in truck['occupied_volumes']:\n                                if (cur_x < occupied_item[1] + occupied_item[4] and cur_x + item_length > occupied_item[1] and\n                                    cur_y < occupied_item[2] + occupied_item[5] and cur_y + item_width > occupied_item[2] and\n                                    cur_z < occupied_item[3] + occupied_item[6] and cur_z + item_height > occupied_item[3]):\n                                    overlap = True\n                                    break\n\n                            if not overlap:\n                                supported = False\n                                if cur_z == 0.0:\n                                    supported = True\n                                else:\n                                    support_area = 0.0\n                                    for occupied_item in truck['occupied_volumes']:\n                                        if abs(cur_z - (occupied_item[3] + occupied_item[6])) < 0.001:\n                                            x_overlap = max(0, min(cur_x + item_length, occupied_item[1] + occupied_item[4]) - max(cur_x, occupied_item[1]))\n                                            y_overlap = max(0, min(cur_y + item_width, occupied_item[2] + occupied_item[5]) - max(cur_y, occupied_item[2]))\n\n                                            if x_overlap > 0 and y_overlap > 0:\n                                                support_area += x_overlap * y_overlap\n\n                                    if support_area >= 0.8 * item_length * item_width:\n                                        supported = True\n\n                                if supported:\n                                    # Calculate fit score (lower is better).  Prioritize tighter fits.\n                                    wasted_volume = (truck_length - (cur_x + item_length)) * truck_width * truck_height + \\\n                                                    (truck_width - (cur_y + item_width)) * truck_length * truck_height + \\\n                                                    (truck_height - (cur_z + item_height)) * truck_length * truck_width\n                                    fit_score = wasted_volume + (truck_capacity - current_weight - item_weight) \n                                    if fit_score < best_fit_score:\n                                        best_fit_score = fit_score\n                                        best_truck_index = t_idx\n                                        best_item_index = i_idx\n                                        best_x = cur_x\n                                        best_y = cur_y\n                                        best_z = cur_z\n\n    # If no suitable placement in existing trucks, open a new truck\n    if best_truck_index == -1:\n        best_truck_type_index = -1\n        best_item_index_new_truck = -1\n        for i_idx, item in enumerate(unplaced_items):\n            item_length = item['length']\n            item_width = item['width']\n            item_height = item['height']\n            item_weight = item['weight']\n            for k, truck_type in enumerate(truck_types):\n                capacity, length, width, height = truck_type\n                if capacity >= item_weight and length >= item_length and width >= item_width and height >= item_height:\n                    if best_truck_type_index == -1 or capacity < truck_types[best_truck_type_index][0]:\n                        best_truck_type_index = k\n                        best_item_index_new_truck = i_idx\n\n        if best_truck_type_index != -1:\n            truck_index = -1\n            item_index = best_item_index_new_truck\n            x = 0.0\n            y = 0.0\n            z = 0.0\n            truck_type_index = best_truck_type_index\n        else:\n            truck_index = -1\n            item_index = -1\n            x = 0.0\n            y = 0.0\n            z = 0.0\n            truck_type_index = -1\n    else:\n        truck_index = best_truck_index\n        item_index = best_item_index\n        x = best_x\n        y = best_y\n        z = best_z\n        truck_type_index = trucks_in_use[truck_index]['truck_type_index']\n        \n    return truck_index, item_index, x, y, z, truck_type_index"
+import numpy as np
+import line_profiler
+@line_profiler.profile
+def place_item(unplaced_items, trucks_in_use, truck_types):
+    """
+    {This algorithm prioritizes placing larger, heavier items first, then iterates through existing trucks to find the best fit, considering space, weight capacity, and support, before resorting to opening a new truck if necessary.}
+    """
+    truck_index = -1
+    item_index = -1
+    x = -1.0
+    y = -1.0
+    z = -1.0
+    truck_type_index = -1
 
+    # Prioritize items with larger volume and weight
+    item_priorities = []
+    for i, item in enumerate(unplaced_items):
+        item_priorities.append(item['length'] * item['width'] * item['height'] * item['weight'])
+    
+    sorted_item_indices = sorted(range(len(item_priorities)), key=lambda k: item_priorities[k], reverse=True)
+
+    for item_idx in sorted_item_indices:
+        item = unplaced_items[item_idx]
+        item_length = item['length']
+        item_width = item['width']
+        item_height = item['height']
+        item_weight = item['weight']
+
+        best_truck_index = -1
+        best_x = -1.0
+        best_y = -1.0
+        best_z = -1.0
+
+        # Try to fit the item into existing trucks
+        for t_idx, truck in enumerate(trucks_in_use):
+            truck_type_index_current = truck['truck_type_index']
+            truck_capacity, truck_length, truck_width, truck_height = truck_types[truck_type_index_current]
+
+            if truck['current_weight'] + item_weight <= truck_capacity:
+                # Find a suitable position within the truck
+                occupied_volumes = truck['occupied_volumes']
+                
+                # Try placing the item at various locations within the truck
+                for cur_x in np.arange(0, truck_length - item_length + 0.1, min(item_length, 0.5)):
+                    for cur_y in np.arange(0, truck_width - item_width + 0.1, min(item_width, 0.5)):
+                        
+                        # Find the highest z where the item can be placed such that it's either on the floor or supported by other items.
+                        max_z = 0.0
+                        
+                        # Check for support from the floor
+                        
+                        # Check for support from other boxes
+                        for placed_item in occupied_volumes:
+                            placed_item_x = placed_item[1]
+                            placed_item_y = placed_item[2]
+                            placed_item_z = placed_item[3]
+                            placed_item_length = placed_item[4]
+                            placed_item_width = placed_item[5]
+                            placed_item_height = placed_item[6]
+                            
+                            if (cur_x >= placed_item_x - 0.001 and cur_x <= placed_item_x + placed_item_length + 0.001 - item_length and
+                                cur_y >= placed_item_y - 0.001 and cur_y <= placed_item_y + placed_item_width + 0.001 - item_width):
+                                max_z = max(max_z, placed_item_z + placed_item_height)
+
+                        cur_z = max_z
+
+                        if cur_z + item_height <= truck_height:
+
+                            # Check for overlap with existing items
+                            overlap = False
+                            for placed_item in occupied_volumes:
+                                placed_item_x = placed_item[1]
+                                placed_item_y = placed_item[2]
+                                placed_item_z = placed_item[3]
+                                placed_item_length = placed_item[4]
+                                placed_item_width = placed_item[5]
+                                placed_item_height = placed_item[6]
+
+                                if (cur_x < placed_item_x + placed_item_length and
+                                    cur_x + item_length > placed_item_x and
+                                    cur_y < placed_item_y + placed_item_width and
+                                    cur_y + item_width > placed_item_y and
+                                    cur_z < placed_item_z + placed_item_height and
+                                    cur_z + item_height > placed_item_z):
+                                    overlap = True
+                                    break
+
+                            if not overlap:
+                                # Check for support
+                                supported_area = 0.0
+                                if cur_z == 0.0:
+                                    supported_area = item_length * item_width # Supported by floor
+                                else:
+                                    for placed_item in occupied_volumes:
+                                        placed_item_x = placed_item[1]
+                                        placed_item_y = placed_item[2]
+                                        placed_item_z = placed_item[3]
+                                        placed_item_length = placed_item[4]
+                                        placed_item_width = placed_item[5]
+                                        placed_item_height = placed_item[6]
+
+                                        x_overlap = max(0.0, min(cur_x + item_length, placed_item_x + placed_item_length) - max(cur_x, placed_item_x))
+                                        y_overlap = max(0.0, min(cur_y + item_width, placed_item_y + placed_item_width) - max(cur_y, placed_item_y))
+
+                                        if cur_z == placed_item_z + placed_item_height:
+                                            supported_area += x_overlap * y_overlap
+
+                                if supported_area >= 0.8 * item_length * item_width:
+                                    # Found a valid placement
+                                    best_truck_index = t_idx
+                                    best_x = cur_x
+                                    best_y = cur_y
+                                    best_z = cur_z
+                                    break
+                    if best_truck_index != -1:
+                        break
+
+        if best_truck_index != -1:
+            # Use the best truck found
+            truck_index = best_truck_index
+            item_index = item_idx
+            x = best_x
+            y = best_y
+            z = best_z
+            break
+
+    # If no suitable truck was found, open a new truck
+    if truck_index == -1:
+        # Find the smallest truck that can accommodate the item
+        best_truck_type_index = -1
+        min_volume = float('inf')
+
+        for tt_idx, truck_type in enumerate(truck_types):
+            truck_capacity, truck_length, truck_width, truck_height = truck_type
+            if (item_length <= truck_length and item_width <= truck_width and item_height <= truck_height and item_weight <= truck_capacity):
+                volume = truck_length * truck_width * truck_height
+                if volume < min_volume:
+                    min_volume = volume
+                    best_truck_type_index = tt_idx
+
+        if best_truck_type_index != -1:
+            truck_index = -1
+            item_index = item_idx
+            x = 0.0
+            y = 0.0
+            z = 0.0
+            truck_type_index = best_truck_type_index
+        else:
+            # No truck can accommodate the item. This is an error.
+            # Assign a default value so that the simulator won't break.
+            # Ideally, you should handle such a case more gracefully.
+            truck_index = -1
+            item_index = 0
+            x = 0.0
+            y = 0.0
+            z = 0.0
+            truck_type_index = 0
+
+    return truck_index, item_index, x, y, z, truck_type_index
 def evaluate(self, code_string):
     try:
         with warnings.catch_warnings():
@@ -18,12 +175,12 @@ def evaluate(self, code_string):
             packing_module = types.ModuleType("packing_module")
             exec(code_string, packing_module.__dict__)
             sys.modules[packing_module.__name__] = packing_module
-            fitness = self.greedy(packing_module)
+            fitness = self.greedy(place_item)
             return fitness
     except Exception as e:
         print("Error during evaluation:", str(e))
         return None
-fitness = evaluate(packing_problem,example_code)
+fitness = evaluate(packing_problem,"")
 def visualize_truck( truck: Truck):
     """Visualizes the contents of a single truck using matplotlib."""
 
