@@ -39,10 +39,10 @@ class Paras():
         self.exp_continue_path = "./results/pops/population_generation_0.json"
         self.exp_n_proc = 1
         
-        #####################
+        ####################d#
         ###  Evaluation settings  ###
         #####################
-        self.eva_timeout = 300
+        self.eva_timeout = 120
         self.eva_numba_decorator = False
 
 

@@ -36,7 +36,7 @@ class InterfaceAPI:
                 return response
             try:
                 conn = http.client.HTTPSConnection(self.api_endpoint)
-                conn.request("POST", "/v1beta/openai/chat/completions", payload_explanation, headers)
+                conn.request("POST", "/api/v1/chat/completions", payload_explanation, headers)
                 res = conn.getresponse()
                 data = res.read()
                 json_data = json.loads(data)

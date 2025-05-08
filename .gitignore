@@ -8,3 +8,4 @@
 output.log
 all_plots
 results
+.env

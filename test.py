@@ -1,22 +1,39 @@
+import os # Import the os module to access environment variables
 from eoh import eoh
 from eoh.utils.getParas import Paras
 from packing import PackingCONST
 # Parameter initilization #
-paras = Paras() 
+from eoh.utils.tyroParas import TyroParas
+import tyro
 
-# Set parameters #
-paras.set_paras(method = "eoh",    # ['ael','eoh']
-                problem = PackingCONST(),
-                llm_api_endpoint = "generativelanguage.googleapis.com", # set your LLM endpoint
-                llm_api_key = "AIzaSyB6Blg32ziFNh-SNmZQvJhuIP1Ho55wQ-g",   # set your LLM key
-                llm_model = "gemini-2.0-flash-001",
-                ec_pop_size = 10, # number of samples in each population
-                ec_n_pop = 5,  # number of populations
-                exp_n_proc = 12,  # multi-core parallel
-                exp_debug_mode = False)
+# This block makes the script runnable via command line using tyro
+if __name__ == "__main__":
+    # --- Get API Key Securely ---
+    # Read the API key from an environment variable
+    # We use .get() to avoid errors if the variable isn't set,
+    # returning None instead.
+    # You might want to add an error check here to ensure the key is present.
+    llm_api_key_value = os.environ.get("LLM_API_KEY")
 
-# initilization
-evolution = eoh.EVOL(paras)
+    # Optional: Add a check to ensure the key was found
+    if not llm_api_key_value:
+        print("Error: LLM_API_KEY environment variable not set.")
+    # ----------------------------
 
-# run 
-evolution.run()
+    programmatic_defaults = TyroParas(
+        method="eoh",
+        problem="packing_const",
+        llm_api_endpoint="openrouter.ai",
+        llm_api_key=llm_api_key_value, # Use the value from the environment variable
+        llm_model="google/gemini-2.0-flash-001",
+        ec_pop_size=10, # number of samples in each population
+        ec_n_pop=5,  # number of populations
+        exp_n_proc=20,  # multi-core parallel
+        exp_debug_mode=False,
+        # Any other parameters you want to set as a default baseline
+    )
+    params = tyro.cli(TyroParas, default=programmatic_defaults)
+
+    evolution = eoh.EVOL(params)
+
+    evolution.run()

@@ -4,9 +4,8 @@ import sys
 import warnings
 from typing import List, Tuple
 import traceback
-from tqdm import tqdm
 import line_profiler
-
+import time
 
 class Truck:
     """Represents a truck with its specifications."""
@@ -74,20 +73,20 @@ class GetData:
         # Stores tuples: (maxLoad, length, width, height) for each truck type encountered
         self.all_truck_types_properties = []
 
-    def generate_instances(self):
+    def generate_instances(self, split="train"):
         """
         Reads data from JSON files, extracts items and truck types,
         and stores them in internal lists for later analysis.
         Returns instance-specific data as before.
         """
-        files = glob.glob("data/train/*")
+        files = glob.glob(f"data/{split}/*")
         instance_data = []
         processed_count = 0
         # Process up to n_instance files or all if less than n_instance
         files_to_process = files[: self.n_instance]  # Use the n_instance attribute
 
         if not files_to_process:
-            print("No files found in data/train/. Cannot generate instances.")
+            print(f"No files found in data/{split}/. Cannot generate instances.")
             return []  # Return empty list if no files
 
         for file in files_to_process:
@@ -306,7 +305,12 @@ Design a novel algorithm to select the next item, truck and its placement to ens
         'x', 'y', and 'z' are floats representing the coordinates of the bottom-left-front corner of the item within the truck.
         'truck_type_index' is an integer representing the index of the truck type in the `truck_types` list to use if a new truck is needed (i.e., if `truck_index` is -1).
         """
-        self.prompt_other_inf = "Use NumPy arrays where appropriate. Ensure that all return values are defined before returning them. The algorithm will be evaluated on instances with hundreds of items and a few truck types, which means that the 'occupied_volumes' in `trucks_in_use` will contain large numbers of entries. Consider implementing an efficient search for available space, weight load calculations, and placement validation to handle such large inputs efficiently."
+        self.prompt_other_inf = """
+        Use NumPy arrays where appropriate.
+        Ensure that all return values are defined before returning them. 
+        The algorithm should not contain any comments or print statements.
+        The algorithm will be evaluated on instances with hundreds of items and a few truck types, which means that the 'occupied_volumes' in `trucks_in_use` will contain large numbers of entries. Consider implementing an efficient search for available space, weight load calculations, and placement validation to handle such large inputs efficiently.
+        """
 
     def get_task(self):
         return self.prompt_task
@@ -329,8 +333,7 @@ Design a novel algorithm to select the next item, truck and its placement to ens
 
 class PackingCONST:
     def __init__(self):
-        self.n_instance = 5
-        self.running_time = 10
+        self.n_instance = 10
 
         getData = GetData(self.n_instance)  # Pass n_truck_types
         self.instance_data = getData.generate_instances()
@@ -422,7 +425,6 @@ class PackingCONST:
             )
             item_total_weight = sum([item.weight for item in items])
             plan = []  # Plan for this specific instance
-            pbar = tqdm(total=len(unplaced_items_indices))
             while unplaced_items_indices:
                 try:
                     unplaced_items_data = []
@@ -538,7 +540,6 @@ class PackingCONST:
                             "truck_type_index": truck_type_index,
                         }
                     )
-                    pbar.update(1)
 
                 except Exception as e:
                     print("An error occurred:", str(e))
@@ -566,7 +567,9 @@ class PackingCONST:
                 fitness = self.greedy(packing_module.place_item)
                 if fitness is not None:
                     fitness, all_plans = fitness
+                else:
+                    fitness = 1.0
                 return fitness
         except Exception as e:
             print("Error during evaluation:", str(e))
-            return None
+            return 1.0
