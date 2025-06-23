@@ -5,7 +5,8 @@ import warnings
 from typing import List, Tuple
 import traceback
 import line_profiler
-import time
+from eoh.invoker import AlgorithmInvoker
+
 
 class Truck:
     """Represents a truck with its specifications."""
@@ -241,6 +242,275 @@ class GetData:
 
 class GetPrompts:
     def __init__(self, data_distribution=""):
+        self.base_class_code = """
+import numpy as np
+
+class BaseAlgorithm:
+    def __init__(self, support_threshold=0.8, epsilon=1e-6):
+        \"\"\"
+        Initializes the base algorithm with common parameters.
+
+        Args:
+            support_threshold (float): The minimum ratio of an item's base area
+                                       that must be supported. Must be between 0.0 and 1.0.
+            epsilon (float): A small positive value for floating-point comparisons.
+                             It's used to provide tolerance, e.g., allowing a value
+                             to be slightly off from an exact boundary or threshold.
+        \"\"\"
+        if not (0.0 <= support_threshold <= 1.0):
+            raise ValueError(\"support_threshold must be between 0.0 and 1.0\")
+        if not epsilon > 0:
+            raise ValueError(\"epsilon should generally be a small positive value.\")
+
+        self.support_threshold = support_threshold
+        self.epsilon = epsilon
+
+    # --- Core Geometric and Validation Primitives ---
+
+    def _check_overlap_3d(self, item1_pos, item1_dims, item2_pos, item2_dims):
+        \"\"\"
+        Checks if two 3D rectangular items' interiors overlap.
+        Touching boundaries is NOT considered overlapping by this definition.
+
+        Args:
+            item1_pos (tuple): (x, y, z) of item 1's minimum corner.
+            item1_dims (tuple): (length, width, height) of item 1.
+            item2_pos (tuple): (x, y, z) of item 2's minimum corner.
+            item2_dims (tuple): (length, width, height) of item 2.
+
+        Returns:
+            bool: True if item interiors overlap, False otherwise.
+        \"\"\"
+        x1, y1, z1 = item1_pos
+        l1, w1, h1 = item1_dims
+        x2, y2, z2 = item2_pos
+        l2, w2, h2 = item2_dims
+
+        overlap_x = (x1 < x2 + l2) and (x1 + l1 > x2)
+        overlap_y = (y1 < y2 + w2) and (y1 + w1 > y2)
+        overlap_z = (z1 < z2 + h2) and (z1 + h1 > z2)
+
+        return overlap_x and overlap_y and overlap_z
+
+    def _check_item_fits_new_truck_type(self, item_details, truck_type_info):
+        \"\"\"
+        Checks if an item's dimensions can fit into a new, empty truck of a given type.
+        This is primarily a dimensional check (item_dim <= truck_dim for l, w, h),
+        assuming the item is placed at (0,0,0).
+
+        Args:
+            item_details (dict): Processed details of the item (from _get_item_details).
+                                 Requires item_details["dims"].
+            truck_type_info (tuple): (capacity, length, width, height) of the truck type.
+
+        Returns:
+            bool: True if the item's dimensions fit within the truck type's dimensions
+                  when placed at (0,0,0), False otherwise.
+        \"\"\"
+        _capacity, tr_l, tr_w, tr_h = truck_type_info
+        
+        empty_truck_details = {
+            "dims": (tr_l, tr_w, tr_h),
+            "placed_items_details": []  # No items placed yet in a new truck
+            # Other keys from _get_truck_details are not strictly needed by
+            # _is_placement_valid for this specific check with an empty truck.
+        }
+
+        return self._is_placement_valid((0.0, 0.0, 0.0), item_details, empty_truck_details)
+
+    def _is_within_truck_bounds(self, item_pos, item_dims, truck_dims):
+        \"\"\"
+        Checks if an item is completely within the truck's dimensions,
+        allowing for epsilon tolerance at the boundaries.
+        An item at x_pos close to 0 (e.g., -1e-7) is considered at the boundary 0.
+        An item ending at x_pos + length close to truck_length (e.g., truck_length + 1e-7)
+        is considered at the truck_length boundary.
+
+        Args:
+            item_pos (tuple): (x, y, z) of the item.
+            item_dims (tuple): (length, width, height) of the item.
+            truck_dims (tuple): (length, width, height) of the truck.
+
+        Returns:
+            bool: True if the item is within bounds (considering epsilon), False otherwise.
+        \"\"\"
+        px, py, pz = item_pos
+        pl, pw, ph = item_dims
+        tl, tw, th = truck_dims
+
+        if not (px >= 0.0 - self.epsilon and px + pl <= tl + self.epsilon):
+            return False
+        if not (py >= 0.0 - self.epsilon and py + pw <= tw + self.epsilon):
+            return False
+        if not (pz >= 0.0 - self.epsilon and pz + ph <= th + self.epsilon):
+            return False
+        return True
+
+    def _check_support(self, new_item_pos, new_item_dims, placed_items_details_list):
+        \"\"\"
+        Checks if an item is adequately supported by items below it or the truck floor.
+        Support means at least `self.support_threshold` of the new item's base area
+        is covered by supporting surfaces. Epsilon is used for float comparisons.
+
+        Args:
+            new_item_pos (tuple): (x, y, z) of the new item.
+            new_item_dims (tuple): (length, width, height) of the new item.
+            placed_items_details_list (list): A list of tuples, where each tuple contains
+                                             ((x,y,z), (l,w,h)) for an already placed item.
+
+        Returns:
+            bool: True if the item is sufficiently supported, False otherwise.
+        \"\"\"
+        new_x, new_y, new_z = new_item_pos
+        new_l, new_w, _ = new_item_dims  # Height of new item not used for its base area
+
+        if new_z < self.epsilon:  # Item is effectively on the truck floor
+            return True
+
+        new_item_base_area = new_l * new_w
+        if new_item_base_area < self.epsilon:
+            return True
+
+        total_supported_area = 0.0
+        for (ex, ey, ez), (el, ew, eh) in placed_items_details_list:
+            if abs(new_z - (ez + eh)) < self.epsilon:
+                x_overlap = max(0.0, min(new_x + new_l, ex + el) - max(new_x, ex))
+                y_overlap = max(0.0, min(new_y + new_w, ey + ew) - max(new_y, ey))
+                total_supported_area += x_overlap * y_overlap
+        
+        return (total_supported_area / new_item_base_area) >= (self.support_threshold - self.epsilon)
+
+    # --- Data Processing Primitives ---
+
+    def _get_item_details(self, item):
+        \"\"\"
+        Extracts and calculates properties for a single item.
+        Assumes item dictionary keys like 'length', 'width', 'height', 'weight', and 'item_id' or 'id'.
+
+        Args:
+            item (dict): The raw item dictionary.
+
+        Returns:
+            dict: A dictionary with processed item details (id, l, w, h, weight, vol, footprint, dims, original_item).
+        \"\"\"
+        l = item.get(\"length\", 0.0)
+        w = item.get(\"width\", 0.0)
+        h = item.get(\"height\", 0.0)
+        wt = item.get(\"weight\", 0.0)
+        # Prioritize \"item_id\" as it's common in competitive programming / specific problem contexts
+        item_id = item.get(\"item_id\", item.get(\"id\", None))
+
+        vol = l * w * h
+        footprint = l * w
+        return {
+            \"id\": item_id,
+            \"l\": l,
+            \"w\": w,
+            \"h\": h,
+            \"weight\": wt,
+            \"vol\": vol,
+            \"footprint\": footprint,
+            \"dims\": (l, w, h),
+            \"original_item\": item,  # Keep a reference to the original item dictionary
+        }
+
+    def _get_truck_details(self, truck_dict, truck_type_info):
+        \"\"\"
+        Extracts and calculates properties for a single truck in use.
+
+        Args:
+            truck_dict (dict): The raw truck dictionary from `trucks_in_use`.
+                               Expected keys: 'truck_type_index', 'current_weight', 'occupied_volumes'.
+            truck_type_info (tuple): Properties of the truck type (capacity, length, width, height).
+
+        Returns:
+            dict: A dictionary with processed truck details.
+                  Includes 'placed_items_details' in the format [((x,y,z), (l,w,h)), ...].
+        \"\"\"
+        # truck_type_info is expected to be (capacity, tr_l, tr_w, tr_h)
+        capacity, tr_l, tr_w, tr_h = truck_type_info
+        current_weight = truck_dict.get(\"current_weight\", 0.0)
+
+        placed_items_details_for_check = []
+        current_occupied_volume_sum = 0.0
+        raw_occupied_volumes = truck_dict.get(\"occupied_volumes\", [])
+
+        for placed_data in raw_occupied_volumes:
+            _item_id, x, y, z, l, w, h = placed_data[0:7]
+            placed_items_details_for_check.append(((x, y, z), (l, w, h)))
+            current_occupied_volume_sum += l * w * h
+
+        total_truck_volume = tr_l * tr_w * tr_h
+        remaining_weight_capacity = capacity - current_weight
+        # Note: remaining_physical_volume is total_truck_volume minus sum of individual item volumes.
+        # This isn't necessarily contiguous usable volume due to packing inefficiencies.
+        remaining_physical_volume = total_truck_volume - current_occupied_volume_sum
+
+        return {
+            \"truck_type_index\": truck_dict.get(\"truck_type_index\"), # Index into the main truck_types list
+            \"capacity\": capacity,
+            \"length\": tr_l,
+            \"width\": tr_w,
+            \"height\": tr_h,
+            \"dims\": (tr_l, tr_w, tr_h),
+            \"total_volume\": total_truck_volume,
+            \"current_weight\": current_weight,
+            \"placed_items_details\": placed_items_details_for_check, # Formatted for overlap/support checks
+            \"raw_occupied_volumes\": raw_occupied_volumes,           # The original list of placed item data
+            \"current_occupied_volume_sum\": current_occupied_volume_sum,
+            \"remaining_weight_capacity\": remaining_weight_capacity,
+            \"remaining_physical_volume\": remaining_physical_volume,
+            \"original_truck_dict\": truck_dict, # Keep a reference to the original truck dictionary
+        }
+
+    # --- Placement Strategy Primitives ---
+
+    def _is_placement_valid(self, new_item_pos, new_item_details, truck_details):
+        \"\"\"
+        Checks if placing an item at a given position in a truck is valid
+        (within bounds, no overlap with existing items, sufficient support).
+        Assumes weight capacity check for the item is done separately/at a higher level
+        before calling this (e.g., when selecting the truck or item).
+
+        Args:
+            new_item_pos (tuple): The (x,y,z) position to check for the new item.
+            new_item_details (dict): Processed details of the item to be placed
+                                     (typically the output from _get_item_details).
+            truck_details (dict): Processed details of the truck
+                                  (typically the output from _get_truck_details).
+
+        Returns:
+            bool: True if the placement is valid according to geometric and support constraints, False otherwise.
+        \"\"\"
+        # 1. Check if the item is within the truck's boundaries (with epsilon tolerance)
+        if not self._is_within_truck_bounds(
+            new_item_pos, new_item_details[\"dims\"], truck_details[\"dims\"]
+        ):
+            return False
+
+        # 2. Check for overlap with already placed items in the truck.
+        #    _check_overlap_3d defines overlap as interiors intersecting (touching is not overlap).
+        for placed_item_pos, placed_item_dims in truck_details[\"placed_items_details\"]:
+            if self._check_overlap_3d(
+                new_item_pos,
+                new_item_details[\"dims\"],
+                placed_item_pos,
+                placed_item_dims,
+            ):
+                return False # Overlap detected
+
+        # 3. Check for sufficient support for the new item.
+        #    This considers support from the truck floor or other items, using epsilon for robustness.
+        if not self._check_support(
+            new_item_pos,
+            new_item_details[\"dims\"],
+            truck_details[\"placed_items_details\"], # List of ((x,y,z),(l,w,h)) of already placed items
+        ):
+            return False # Insufficient support
+
+        return True # All checks passed: within bounds, no overlap, sufficient support
+"""
+
         self.prompt_task = (
             "Given a list of items with their dimensions and weights, and a list of truck types with their dimensions and weight capacities, \
 you need to place all items into the trucks without overlapping, minimizing the number of trucks used. \
@@ -263,7 +533,7 @@ Design a novel algorithm to select the next item, truck and its placement to ens
             + "\n"
             + data_distribution
         )
-        self.prompt_func_name = "place_item"
+        self.prompt_func_name = "place_item"  # This will be the method name
         self.prompt_func_inputs = ["unplaced_items", "trucks_in_use", "truck_types"]
         self.prompt_func_outputs = [
             "truck_index",
@@ -272,7 +542,7 @@ Design a novel algorithm to select the next item, truck and its placement to ens
             "y",
             "z",
             "truck_type_index",
-        ]  # Added truck_type_index
+        ]
         self.prompt_inout_inf = """
         'unplaced_items' is a list of dictionaries, each representing an unplaced item.  Each dictionary has the following keys:
             - 'item_id': str, a unique identifier for the item.
@@ -308,27 +578,31 @@ Design a novel algorithm to select the next item, truck and its placement to ens
         self.prompt_other_inf = """
         Use NumPy arrays where appropriate.
         Ensure that all return values are defined before returning them. 
-        The algorithm should not contain any comments or print statements.
+        The algorithm in the `place_item` method and its helper methods should not contain any comments or print statements.
         The algorithm will be evaluated on instances with hundreds of items and a few truck types, which means that the 'occupied_volumes' in `trucks_in_use` will contain large numbers of entries. Consider implementing an efficient search for available space, weight load calculations, and placement validation to handle such large inputs efficiently.
         """
 
     def get_task(self):
         return self.prompt_task
 
-    def get_func_name(self):
+    def get_func_name(self):  # Method name
         return self.prompt_func_name
 
-    def get_func_inputs(self):
+    def get_func_inputs(self):  # Method inputs
         return self.prompt_func_inputs
 
-    def get_func_outputs(self):
+    def get_func_outputs(self):  # Method outputs
         return self.prompt_func_outputs
 
-    def get_inout_inf(self):
+    def get_inout_inf(self):  # Method I/O info
         return self.prompt_inout_inf
 
     def get_other_inf(self):
         return self.prompt_other_inf
+
+    def get_base_class_code(self):
+        return self.base_class_code
+
 
 
 class PackingCONST:
@@ -338,7 +612,7 @@ class PackingCONST:
         getData = GetData(self.n_instance)  # Pass n_truck_types
         self.instance_data = getData.generate_instances()
         self.prompts = GetPrompts(getData.generate_percentile_prompt())
-
+        self.base_class_code = self.prompts.get_base_class_code()
     def _check_overlap(self, item1: Item, item2: Item) -> bool:
         """Checks if two items overlap in 3D space."""
         return not (
@@ -350,18 +624,17 @@ class PackingCONST:
             or item2.z + item2.height <= item1.z
         )
 
-    def _check_truck_constraints(self, truck: Truck, item: Item, x, y, z) -> bool:
-        """Checks if adding an item to a truck violates weight or size constraints."""
+    def _check_weight_constraint(self, truck: Truck, item: Item) -> bool:
+        """Checks if adding an item to a truck violates the weight constraint."""
+        return truck.used_weight + item.weight <= truck.max_weight
 
-        if truck.used_weight + item.weight > truck.max_weight:
-            return False  # Weight constraint violated
-        if (
-            x + item.length > truck.length
-            or y + item.width > truck.width
-            or z + item.height > truck.height
-        ):
-            return False
-        return True
+    def _check_size_constraint(self, truck: Truck, item: Item, x, y, z) -> bool:
+        """Checks if adding an item to a truck violates the size constraints."""
+        return (
+            x + item.length <= truck.length
+            and y + item.width <= truck.width
+            and z + item.height <= truck.height
+        )
 
     def calculate_loading_efficiency(
         self, trucks: List[Truck], item_total_volume, item_total_weight
@@ -467,43 +740,75 @@ class PackingCONST:
                         unplaced_items_data, trucks_in_use_data, truck_types
                     )
                     # --- Input Validation ---
-                    if not isinstance(truck_index, int):
-                        return None
-                    if not isinstance(item_index, int):
-                        return None
+                    try:
+                        truck_index = int(truck_index)
+                    except (ValueError, TypeError):
+                        return (
+                            None,
+                            f"Invalid output from `place_item`: `truck_index` must be an integer, but got {type(truck_index)}.",
+                        )
+                    try:
+                        item_index = int(item_index)
+                    except (ValueError, TypeError):
+                        return (
+                            None,
+                            f"Invalid output from `place_item`: `item_index` must be an integer, but got {type(item_index)}.",
+                        )
                     if not all(isinstance(coord, (int, float)) for coord in [x, y, z]):
-                        return None
+                        return (
+                            None,
+                            f"Invalid output from `place_item`: Coordinates must be integers or floats, but got {type(x)}, {type(y)}, {type(z)}.",
+                        )
                     if not isinstance(truck_type_index, int):
-                        return None
+                        return (
+                            None,
+                            f"Invalid output from `place_item`: `truck_type_index` must be an integer, but got {type(truck_type_index)}.",
+                        )
 
                     if not 0 <= item_index < len(unplaced_items_indices):
-                        return None
+                        return (
+                            None,
+                            f"Invalid `item_index`: {item_index} is out of bounds for unplaced items.",
+                        )
 
                     actual_item_index = unplaced_items_indices[item_index]
                     selected_item = items[actual_item_index]
-
+                    final_truck_index = truck_index
                     # Handle new truck creation
                     if truck_index == -1:
                         if not 0 <= truck_type_index < len(truck_types):
-                            return None
+                            return (
+                                None,
+                                f"Invalid `truck_type_index`: {truck_type_index} is out of bounds for truck types.",
+                            )
                         capacity, length, width, height = truck_types[truck_type_index]
                         new_truck = Truck(
                             str(len(trucks_in_use)), length, width, height, capacity
                         )
                         new_truck.type_id = truck_type_index
                         trucks_in_use.append(new_truck)
-                        truck_index = len(trucks_in_use) - 1
+                        final_truck_index = len(trucks_in_use) - 1
 
-                    if not 0 <= truck_index < len(trucks_in_use):
-                        return None
+                    if not 0 <= final_truck_index < len(trucks_in_use):
+                        return (
+                            None,
+                            f"Invalid `truck_index`: {truck_index} is out of bounds for trucks in use.",
+                        )
 
-                    selected_truck = trucks_in_use[truck_index]
+                    selected_truck = trucks_in_use[final_truck_index]
 
-                    # Check constraints
-                    if not self._check_truck_constraints(
+                    if not self._check_weight_constraint(selected_truck, selected_item):
+                        return (
+                            None,
+                            f"Item {selected_item.item_id} with weight {selected_item.weight} cannot be placed in truck with current weight {selected_truck.used_weight}. Because it violates weight constraints. Return context: truck_index={truck_index}, item_index={item_index}, x={x}, y={y}, z={z}, truck_type_index={truck_type_index}.",
+                        )
+                    if not self._check_size_constraint(
                         selected_truck, selected_item, x, y, z
                     ):
-                        return None
+                        return (
+                            None,
+                            f"Item {selected_item.item_id} with dimensions ({selected_item.length}, {selected_item.width}, {selected_item.height}) cannot be placed at ({x}, {y}, {z}) in truck with dimensions ({selected_truck.length}, {selected_truck.width}, {selected_truck.height}). Because it violates size constraints. Return context: truck_index={truck_index}, item_index={item_index}, x={x}, y={y}, z={z}, truck_type_index={truck_type_index}.",
+                        )
 
                     # Check overlap
                     overlap = False
@@ -513,11 +818,17 @@ class PackingCONST:
                             overlap = True
                             break
                     if overlap:
-                        return None
+                        return (
+                            None,
+                            f"Item {selected_item.item_id} overlaps with another item in the truck.",
+                        )
 
                     # Check support constraint
                     if not self.check_support_constraint(selected_truck, selected_item):
-                        return None  # Or handle the unsupported item (e.g., try a different position/truck)
+                        return (
+                            None,
+                            f"Item {selected_item.item_id} is not supported properly in the truck.",
+                        )
 
                     # Update truck and item status
                     selected_truck.items.append(selected_item)
@@ -532,7 +843,7 @@ class PackingCONST:
                     # Add the placement to the plan
                     plan.append(
                         {
-                            "truck_index": truck_index,
+                            "truck_index": final_truck_index,
                             "item_index": actual_item_index,
                             "x": x,
                             "y": y,
@@ -544,7 +855,7 @@ class PackingCONST:
                 except Exception as e:
                     print("An error occurred:", str(e))
                     print(traceback.format_exc())
-                    return None
+                    return None, f"An error occurred during item placement: {str(e)}"
 
             # Calculate and append the efficiency score
             efficiency_score = self.calculate_loading_efficiency(
@@ -557,19 +868,13 @@ class PackingCONST:
         average_efficiency = np.average(total_efficiency_scores)
         return average_efficiency, all_plans
 
-    def evaluate(self, code_string):
+    def evaluate(self, invoker: AlgorithmInvoker):
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                packing_module = types.ModuleType("packing_module")
-                exec(code_string, packing_module.__dict__)
-                sys.modules[packing_module.__name__] = packing_module
-                fitness = self.greedy(packing_module.place_item)
-                if fitness is not None:
-                    fitness, all_plans = fitness
-                else:
-                    fitness = 1.0
+                fitness = self.greedy(invoker.get_methods())
                 return fitness
         except Exception as e:
             print("Error during evaluation:", str(e))
-            return 1.0
+            fitness = None
+            return fitness, f"An error occurred during evaluation: {str(e)}"

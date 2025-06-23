@@ -9,49 +9,9 @@ from func_timeout import func_timeout, FunctionTimedOut
 import traceback
 import functools # Recommended practice for decorators
 import random
+from eoh.invoker import AlgorithmInvoker
 
 
-# Define the decorator
-def timeout_decorator(timeout_seconds):
-    """
-    A decorator that applies a timeout to the decorated function.
-
-    Args:
-        timeout_seconds (float): The maximum time in seconds the decorated function
-                                 is allowed to run before timing out.
-    """
-    if not isinstance(timeout_seconds, (int, float)) or timeout_seconds <= 0:
-        raise ValueError("Timeout seconds must be a positive number.")
-
-    def decorator(func):
-        # Use functools.wraps to preserve the original function's name, docstring, etc.
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            # This wrapper function is what gets called when the decorated func is invoked
-            try:
-                # Call the original function (func) with the specified timeout
-                # Pass along all arguments (*args, **kwargs)
-                result = func_timeout(timeout_seconds, func, args=args, kwargs=kwargs)
-                return result
-            except FunctionTimedOut:
-                # Handle the timeout case
-                print(f"Task timed out after {timeout_seconds} seconds (args={args}, kwargs={kwargs})")
-                # Return None or some other indicator for timeout
-                return None # Matching the original task_with_timeout function's behavior
-            except Exception as e:
-                # Handle any other exceptions raised by the original function
-                print(f"Task failed with an exception (args={args}, kwargs={kwargs}): {e}")
-                traceback.print_exc()
-                # Return an error indicator - match original behavior
-                return f"Error: {e}"
-
-        # The decorator returns the wrapper function
-        return wrapper
-
-    # The decorator factory returns the actual decorator
-    return decorator
-job_timeout = 1.5  # Timeout for each individual job in seconds
-max_task_duration = 2.5 # Max sleep time for tasks
 
 import numpy as np
 import time
@@ -65,48 +25,114 @@ import traceback
 import functools # Recommended practice for decorators
 import random
 
+DEFAULT_CLASS_NAME_HIERARCHY = ["Algorithm", "AlgorithmFIX1", "AlgorithmFIX2", "AlgorithmFIX3"]
 
-# Define the decorator
-def timeout_decorator(timeout_seconds):
+def timed_code_evaluation(
+    interface_eval, invoker: AlgorithmInvoker, timeout
+):
+    try:
+        fitness_val, error_msg_eval = func_timeout(
+            timeout,
+            interface_eval.evaluate,
+            args=(
+                invoker,
+            ),
+        )
+    except FunctionTimedOut:
+        fitness_val = None
+        error_msg_eval = f"Evaluation timed out for class '{invoker.class_to_instantiate_name}'."
+    except Exception as e:
+        fitness_val = None
+        error_msg_eval = f"An unexpected error occurred during timed evaluation: {type(e).__name__}: {str(e)}"
+    return fitness_val, error_msg_eval
+
+def extract_python_code_from_llm_response(markdown_string):
+    if not isinstance(markdown_string, str):
+        return None
+    match = re.search(r"```python\n(.*?)\n```", markdown_string, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    if "```" not in markdown_string and (
+        markdown_string.strip().startswith("class ") or
+        markdown_string.strip().startswith("def ") or
+        markdown_string.strip().startswith("import ")
+        ):
+        return markdown_string.strip()
+    return None
+
+def process_code_submission_with_llm_fixing(
+    initial_prompt,
+    initial_code,
+    base_class_code_str,
+    interface_eval,
+    call_llm_api,
+    timeout
+):
+    llm_conversation_history = [
+        {"role": "user", "content": initial_prompt},
+        {"role": "assistant", "content": initial_code},
+    ]
+    successful_parent_code_definitions = []
+    final_successful_code_block = None
+    class_name_hierarchy = DEFAULT_CLASS_NAME_HIERARCHY 
+    max_attempts = len(class_name_hierarchy)
+    code_for_current_attempt = initial_code
+    final_fitness_achieved = None
+    for attempt_idx in range(max_attempts):
+        current_class_to_instantiate = class_name_hierarchy[attempt_idx]
+        definitions_for_eval = successful_parent_code_definitions + [code_for_current_attempt]
+
+        fitness_val, error_msg_eval = timed_code_evaluation(interface_eval,AlgorithmInvoker(base_class_code_str,definitions_for_eval,current_class_to_instantiate), timeout)
+        attempt_info = {"class_name": current_class_to_instantiate, "fitness": fitness_val}
+        if fitness_val is None:
+            attempt_info["error"] = error_msg_eval
+
+        if fitness_val is not None:
+            print(f"SUCCESS: Evaluation successful for {current_class_to_instantiate}! Fitness: {fitness_val}")
+            final_successful_code_block = "\n".join(definitions_for_eval)
+            final_fitness_achieved = fitness_val
+            break
+        else:
+            if attempt_idx == max_attempts - 1:
+                print("Max attempts reached. Could not fix the code for this submission.")
+                break
+
+            next_llm_class_name = class_name_hierarchy[attempt_idx + 1]
+            parent_class_for_llm_fix = current_class_to_instantiate
+
+            fix_prompt = f"""The Python code for class `{parent_class_for_llm_fix}` has an issue.
+    When this class was used in the packing algorithm, it resulted in the following error:
+    {error_msg_eval}
+
+    Instructions:
+    1. Analyze the error message and the provided code for `{parent_class_for_llm_fix}`.
+    2. Create a new Python class named `{next_llm_class_name}`.
+    3. This new class `{next_llm_class_name}` MUST inherit from class `{parent_class_for_llm_fix}`.
+    4. In the new class (`{next_llm_class_name}`), override only the specific method(s) from `{parent_class_for_llm_fix}` that are causing the error or are directly related to fixing it. Do NOT rewrite the entire `{parent_class_for_llm_fix}` class, only provide the overridden methods or necessary additions in `{next_llm_class_name}`.
+    5. The primary objective is to resolve the specified error so the code can run without this error.
+    6. Ensure your fixed code is robust and adheres to the original problem's requirements if the error points to a deviation.
+    7. Your response should ONLY be the Python code for the new `{next_llm_class_name}` class. Do not include any explanatory text, markdown formatting for the code block itself, or anything other than the class definition.
     """
-    A decorator that applies a timeout to the decorated function.
+            current_fix_request_message = {"role": "user", "content": fix_prompt}
+            messages_to_send_to_llm = llm_conversation_history + [current_fix_request_message]
 
-    Args:
-        timeout_seconds (float): The maximum time in seconds the decorated function
-                                 is allowed to run before timing out.
-    """
-    if not isinstance(timeout_seconds, (int, float)) or timeout_seconds <= 0:
-        raise ValueError("Timeout seconds must be a positive number.")
+            llm_generated_code_fix_raw = call_llm_api(messages_to_send_to_llm)
+            llm_generated_code_fix = extract_python_code_from_llm_response(llm_generated_code_fix_raw)
 
-    def decorator(func):
-        # Use functools.wraps to preserve the original function's name, docstring, etc.
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            # This wrapper function is what gets called when the decorated func is invoked
-            try:
-                # Call the original function (func) with the specified timeout
-                # Pass along all arguments (*args, **kwargs)
-                result = func_timeout(timeout_seconds, func, args=args, kwargs=kwargs)
-                return result
-            except FunctionTimedOut:
-                # Handle the timeout case
-                print(f"Task timed out after {timeout_seconds} seconds (args={args}, kwargs={kwargs})")
-                # Return None or some other indicator for timeout
-                return None # Matching the original task_with_timeout function's behavior
-            except Exception as e:
-                # Handle any other exceptions raised by the original function
-                print(f"Task failed with an exception (args={args}, kwargs={kwargs}): {e}")
-                traceback.print_exc()
-                # Return an error indicator - match original behavior
-                return f"Error: {e}"
+            if llm_generated_code_fix:
+                llm_conversation_history.append(current_fix_request_message)
+                llm_conversation_history.append({"role": "assistant", "content": llm_generated_code_fix_raw})
+                successful_parent_code_definitions.append(code_for_current_attempt)
+                code_for_current_attempt = llm_generated_code_fix
+            else:
+                print("LLM did not return valid code. Stopping iterative fixing for this submission.")
+                break
+    
+    status_message = "SUCCESS" if final_successful_code_block else "FAILED"
+    print(f"\n--- Processing of code submission Finished: {status_message} ---")
+    return current_class_to_instantiate, final_successful_code_block, final_fitness_achieved
 
-        # The decorator returns the wrapper function
-        return wrapper
 
-    # The decorator factory returns the actual decorator
-    return decorator
-job_timeout = 1.5  # Timeout for each individual job in seconds
-max_task_duration = 2.5 # Max sleep time for tasks
 
 def _standalone_get_alg(pop, operator, select, m, evol):
     """
@@ -127,6 +153,7 @@ def _standalone_get_alg(pop, operator, select, m, evol):
     offspring = {
         'algorithm': None,
         'code': None,
+        'prompt': None
         # These will be filled later
         # 'objective': None,
         # 'other_inf': None
@@ -136,27 +163,27 @@ def _standalone_get_alg(pop, operator, select, m, evol):
     try:
         if operator == "i1":
             parents = None # Explicitly None for initialization
-            offspring['code'], offspring['algorithm'] = evol.i1()
+            offspring['prompt'], offspring['code'], offspring['algorithm'] = evol.i1()
         elif operator == "e1":
             parents = select.parent_selection(pop, m)
             if not parents: raise ValueError(f"Parent selection failed for e1 (m={m}, pop_size={len(pop)})")
-            offspring['code'], offspring['algorithm'] = evol.e1(parents)
+            offspring['prompt'], offspring['code'], offspring['algorithm']  = evol.e1(parents)
         elif operator == "e2":
             parents = select.parent_selection(pop, m)
             if not parents: raise ValueError(f"Parent selection failed for e2 (m={m}, pop_size={len(pop)})")
-            offspring['code'], offspring['algorithm'] = evol.e2(parents)
+            offspring['prompt'], offspring['code'], offspring['algorithm']  = evol.e2(parents)
         elif operator == "m1":
             parents = select.parent_selection(pop, 1)
             if not parents: raise ValueError(f"Parent selection failed for m1 (pop_size={len(pop)})")
-            offspring['code'], offspring['algorithm'] = evol.m1(parents[0])
+            offspring['prompt'], offspring['code'], offspring['algorithm']  = evol.m1(parents[0])
         elif operator == "m2":
             parents = select.parent_selection(pop, 1)
             if not parents: raise ValueError(f"Parent selection failed for m2 (pop_size={len(pop)})")
-            offspring['code'], offspring['algorithm'] = evol.m2(parents[0])
+            offspring['prompt'], offspring['code'], offspring['algorithm']  = evol.m2(parents[0])
         elif operator == "m3":
             parents = select.parent_selection(pop, 1)
             if not parents: raise ValueError(f"Parent selection failed for m3 (pop_size={len(pop)})")
-            offspring['code'], offspring['algorithm'] = evol.m3(parents[0])
+            offspring['prompt'], offspring['code'], offspring['algorithm']  = evol.m3(parents[0])
         else:
             print(f"Evolution operator [{operator}] has not been implemented ! \n")
             # Return empty offspring if operator is invalid
@@ -171,32 +198,6 @@ def _standalone_get_alg(pop, operator, select, m, evol):
     return parents, offspring
 
 
-def _check_duplicate_standalone(population, code):
-    """Standalone check for duplicate code in the population."""
-    if code is None: # Cannot check duplicates if code is None
-        return False
-    for ind in population:
-        if code == ind.get('code'): # Use .get for safety
-            return True
-    return False
-
-def _evaluate_offspring_timed(code, interface_eval, timeout):
-    """Helper function to evaluate code with a specific timeout."""
-    if code is None:
-        print("Cannot evaluate None code.")
-        return None # Or raise an error, depending on desired behavior
-
-    try:
-        # Use func_timeout directly here
-        fitness = func_timeout(timeout, interface_eval.evaluate, args=(code,))
-        return np.round(fitness, 5)
-    except FunctionTimedOut:
-        print(f"Evaluation timed out after {timeout} seconds")
-        return None # Indicate timeout
-    except Exception as e:
-        print(f"Evaluation failed\nError: {e}")
-        # traceback.print_exc() # Optional: print full traceback for eval errors
-        return None # Indicate failure
 
 def get_offspring_standalone(pop, operator, select, m, evol, interface_eval, use_numba, debug, timeout):
     """
@@ -236,47 +237,6 @@ def get_offspring_standalone(pop, operator, select, m, evol, interface_eval, use
 
         generated_code = offspring_data['code'] # The original code from the first attempt
 
-        # --- Duplicate Check & Retry Part (Mimicking get_offspring's logic) ---
-        is_duplicate = _check_duplicate_standalone(pop, generated_code)
-
-        # get_offspring has a loop that runs IF duplicate is found, and breaks after 1 retry.
-        # We can replicate this logic structure.
-        n_retry = 0 # Counter for duplicate retries
-
-        # Loop runs if currently a duplicate AND we haven't retried yet (max 1 retry)
-        while is_duplicate and n_retry < 1: # This loop runs at most once
-             if debug: print(f"Duplicated code found (Attempt {n_retry+1}). Retrying generation once...")
-
-             # Attempt generation again (this is the single duplicate retry)
-             p_retry, offspring_data_retry = _standalone_get_alg(pop, operator, select, m, evol)
-
-             if offspring_data_retry is not None and offspring_data_retry.get('code') is not None:
-                 # Update the main variables with the retry result regardless of its duplicate status
-                 # This matches how get_offspring updates 'offspring' and 'p' in its retry loop
-                 offspring_data = offspring_data_retry
-                 p = p_retry
-                 generated_code = offspring_data['code'] # Update the code reference to the new code
-                 is_duplicate = _check_duplicate_standalone(pop, generated_code) # Check duplicate status of the new code
-                 if debug: print(f"Retry {n_retry+1}: Generated new code. Is it duplicate? {is_duplicate}")
-             else:
-                # If the retry generation itself failed
-                if debug: print(f"Retry {n_retry+1} generation failed to produce valid code.")
-                # Trigger exception handling if the retry generation fails
-                raise ValueError("Retry generation failed.")
-
-             n_retry += 1 # Increment retry counter. Loop condition check will now be `n_retry < 1` (1 < 1 or 2 < 1) which will be false, ending the loop.
-
-
-        # After the duplicate retry block:
-        # - If the first attempt was not a duplicate, generated_code is the original code.
-        # - If the first attempt was a duplicate, generated_code is the code from the single retry.
-        # - is_duplicate holds the duplicate status of the *final* generated_code.
-        # Note: Similar to get_offspring, we proceed even if the final code (from retry) is still a duplicate.
-        # The responsibility to handle this might be outside this function (e.g., in the main GA loop).
-
-
-        # --- Numba Application Part (Applied to the final generated code) ---
-        # This code will be used for evaluation
         code_to_evaluate = generated_code
 
         processed_code = code_to_evaluate # Default if Numba is off or fails
@@ -297,20 +257,21 @@ def get_offspring_standalone(pop, operator, select, m, evol, interface_eval, use
                  # get_offspring's broad except would catch this.
                  raise # Re-raise the Numba error to be caught below
 
-
-            # --- Evaluation Part ---
-        remaining_timeout = timeout
-        if remaining_timeout <= 0:
-                print("Timeout exceeded before evaluation.")
-                raise FunctionTimedOut("Overall timeout exceeded before evaluation.")
-
-        fitness = _evaluate_offspring_timed(processed_code, interface_eval, remaining_timeout)
+        class_name,generated_code,fitness = process_code_submission_with_llm_fixing(
+            initial_prompt=offspring_data['prompt'],
+            initial_code=processed_code,
+            base_class_code_str=interface_eval.base_class_code,
+            interface_eval=interface_eval,
+            call_llm_api=evol.interface_llm.interface_llm.call_llm_api,
+            timeout=timeout
+        )
 
         # --- Success Case ---
         if fitness is not None: # Evaluation succeeded (could be 0)
             final_offspring['algorithm'] = offspring_data['algorithm']
             final_offspring['code'] = generated_code # Store original code
             final_offspring['objective'] = fitness
+            final_offspring['class_name'] =class_name
             # Potentially store processed_code in 'other_inf' if needed
             # final_offspring['other_inf'] = {'processed_code': processed_code}
             if debug: print(f"Successfully generated and evaluated offspring (Obj: {fitness}).")
@@ -420,36 +381,6 @@ class InterfaceEC():
         return population
     
 
-    def _get_alg(self,pop,operator):
-        offspring = {
-            'algorithm': None,
-            'code': None,
-            'objective': None,
-            'other_inf': None
-        }
-        if operator == "i1":
-            parents = None
-            [offspring['code'],offspring['algorithm']] =  self.evol.i1()            
-        elif operator == "e1":
-            parents = self.select.parent_selection(pop,self.m)
-            [offspring['code'],offspring['algorithm']] = self.evol.e1(parents)
-        elif operator == "e2":
-            parents = self.select.parent_selection(pop,self.m)
-            [offspring['code'],offspring['algorithm']] = self.evol.e2(parents) 
-        elif operator == "m1":
-            parents = self.select.parent_selection(pop,1)
-            [offspring['code'],offspring['algorithm']] = self.evol.m1(parents[0])   
-        elif operator == "m2":
-            parents = self.select.parent_selection(pop,1)
-            [offspring['code'],offspring['algorithm']] = self.evol.m2(parents[0]) 
-        elif operator == "m3":
-            parents = self.select.parent_selection(pop,1)
-            [offspring['code'],offspring['algorithm']] = self.evol.m3(parents[0]) 
-        else:
-            print(f"Evolution operator [{operator}] has not been implemented ! \n") 
-
-        return parents, offspring
-
     def get_offspring(self, pop, operator):
 
         try:
@@ -498,7 +429,6 @@ class InterfaceEC():
             fitness = self.interface_eval.evaluate(code)
             offspring['objective'] = np.round(fitness, 5)
                 # fitness = self.interface_eval.evaluate(code)
-                
 
         except Exception as e:
 
@@ -544,7 +474,6 @@ class InterfaceEC():
     def get_algorithm(self, pop, operator):
         results = []
         print(f"Generating {self.pop_size} offspring using operator '{operator}' with timeout {self.timeout}s each...")
-
         # Prepare arguments for the delayed calls
         args_list = []
         for _ in range(self.pop_size):
@@ -572,6 +501,30 @@ class InterfaceEC():
             print(f"Error: {e}")
             print("Parallel time out .")
             
+
+        # print(f"Generating {self.pop_size} offspring using operator '{operator}' with timeout {self.timeout}s each...")
+        # # Prepare arguments for the delayed calls
+        # args_list = []
+        # for _ in range(self.pop_size):
+        #     args_list.append(
+        #     {
+        #         'pop': pop,
+        #         'operator': operator,
+        #         'select': self.select,
+        #         'm': self.m,
+        #         'evol': self.evol,
+        #         'interface_eval': self.interface_eval,
+        #         'use_numba': self.use_numba,
+        #         'debug': self.debug,
+        #         'timeout': self.timeout # Pass the per-job timeout
+        #     }
+        #     )
+        # results = []
+        # for i, args in enumerate(args_list):
+        #     result = get_offspring_standalone(**args)
+        #     results.append(result)
+        #     if self.debug:
+        #         print(f"Job {i}: {result}")
         time.sleep(2)
 
 
@@ -583,6 +536,11 @@ class InterfaceEC():
             out_off.append(off)
             if self.debug:
                 print(f">>> check offsprings: \n {off}")
+        # # save out_off to json file
+        # with open("./offspring.json", "w") as f:
+        #     import json
+        #     json.dump(out_off, f, indent=4) 
+
         return out_p, out_off
     # def get_algorithm(self,pop,operator, pop_size, n_p):
         

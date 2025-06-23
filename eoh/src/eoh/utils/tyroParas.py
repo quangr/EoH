@@ -55,7 +55,7 @@ class TyroParas:
     #####################
     ###  Evaluation settings  ###
     #####################
-    eva_timeout: int = 120 # Timeout in seconds for evaluation
+    eva_timeout: int = 20 # Timeout in seconds for evaluation
     eva_numba_decorator: bool = False # Use numba decorator for evaluation
 
     _problem_instance: object = dataclasses.field(default=None, init=False, repr=False)

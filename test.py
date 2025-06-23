@@ -24,9 +24,11 @@ if __name__ == "__main__":
         method="eoh",
         problem="packing_const",
         llm_api_endpoint="openrouter.ai",
-        llm_api_key=llm_api_key_value, # Use the value from the environment variable
+        llm_api_key=llm_api_key_value, # Use the value from the environment variable        
         llm_model="google/gemini-2.0-flash-001",
-        ec_pop_size=10, # number of samples in each population
+        # llm_model="google/gemini-2.5-flash-preview-05-20",
+        # llm_model="google/gemini-2.0-flash-lite-001",
+        ec_pop_size=5, # number of samples in each population
         ec_n_pop=5,  # number of populations
         exp_n_proc=20,  # multi-core parallel
         exp_debug_mode=False,
