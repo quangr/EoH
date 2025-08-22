@@ -82,11 +82,11 @@ def process_code_submission_with_llm_fixing(
         current_class_to_instantiate = class_name_hierarchy[attempt_idx]
         definitions_for_eval = successful_parent_code_definitions + [code_for_current_attempt]
 
-        fitness_val, error_msg_eval = timed_code_evaluation(interface_eval,AlgorithmInvoker(base_class_code_str,definitions_for_eval,current_class_to_instantiate), timeout)
+        fitness_val, error_msg_eval = timed_code_evaluation(interface_eval,AlgorithmInvoker(base_class_code_str,definitions_for_eval,current_class_to_instantiate,interface_eval.prompts.prompt_func_name ), timeout)
         attempt_info = {"class_name": current_class_to_instantiate, "fitness": fitness_val}
         if fitness_val is None:
             attempt_info["error"] = error_msg_eval
-
+            print(f"Attempt {attempt_idx + 1}: {error_msg_eval}")
         if fitness_val is not None:
             print(f"SUCCESS: Evaluation successful for {current_class_to_instantiate}! Fitness: {fitness_val}")
             final_successful_code_block = "\n".join(definitions_for_eval)

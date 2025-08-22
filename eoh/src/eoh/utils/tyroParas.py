@@ -121,24 +121,23 @@ class TyroParas:
         elif self.problem == 'tsp_construct':
             self.eva_timeout = 20
             print("> Problem 'tsp_construct' detected, setting eva_timeout=20.")
-            # Add logic here if you need a specific object instance for tsp_construct
-            # e.g., self._problem_instance = TSPProblem(...)
         # Add case for 'packing_const' problem
         elif self.problem == 'packing_const':
-            print("> Problem 'packing_const' detected.")
-            try:
-                 # Import and instantiate the specific problem class
-                 # Make sure PackingCONST is importable in the environment this runs in
-                 from packing import PackingCONST # Example import
-                 self._problem_instance = PackingCONST()
-                 print("> Created PackingCONST instance and stored in _problem_instance.")
-            except ImportError:
-                 print("> Warning: Could not import PackingCONST. Problem instance will not be available.")
-                 self._problem_instance = None # Ensure it's None if import fails
-            except Exception as e:
-                 print(f"> Warning: Error creating PackingCONST instance: {e}")
-                 self._problem_instance = None # Ensure it's None if instantiation fails
-
+            from packing import PackingCONST # Example import
+            self._problem_instance = PackingCONST()
+            print("> Created PackingCONST instance and stored in _problem_instance.")
+        elif self.problem == 'ssscsp':
+            from SSSCSP import PackingCONST
+            self._problem_instance = PackingCONST()
+        elif self.problem == 'ssscsp_support':
+            from SSSCSP_sup import PackingCONST
+            self._problem_instance = PackingCONST()
+        elif self.problem == 'ssscsp_separation':
+            from SSSCSP_sep import PackingCONST
+            self._problem_instance = PackingCONST()
+        elif self.problem == 'ssscsp_all':
+            from SSSCSP_all import PackingCONST
+            self._problem_instance = PackingCONST()
 
     # --- Keep __repr__ method as before ---
     def __repr__(self) -> str:

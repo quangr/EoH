@@ -18,6 +18,7 @@ class InterfaceAPI:
                     # {"role": "system", "content": "You are a helpful assistant."},
                     {"role": "user", "content": prompt_content}
                 ],
+                "reasoning": {"enabled": False, "max_tokens": 0},
             }
         )
 
@@ -56,6 +57,7 @@ class InterfaceAPI:
             {
                 "model": self.model_LLM,
                 "messages": messages,
+                "reasoning": {"enabled": False, "max_tokens": 0},
             }
         )
 

@@ -81,7 +81,7 @@ packing_problem.instance_data = getData.generate_instances(split="test")
 base_class_code = packing_problem.base_class_code
 all_infos = []
 
-code_file_path = "output/2.0/30_0/results/pops/population_generation_5.json"
+code_file_path = "output/50_2/results/pops/population_generation_5.json"
 with open(code_file_path, "r") as file:
     all_codes = json.load(file)
 
@@ -98,11 +98,11 @@ for code_dict in all_codes:
     code_for_current_class = llm_generated_code_fix
 
     definitions_for_eval = [code_dict["code"]]
-
+    start_time = time.time()
     fitness_val, error_msg_eval, _ = evaluate(packing_problem,
         base_class_code,
         definitions_for_eval,
         current_class_to_instantiate,
     )
-
+    print(f"Evaluation time for {current_class_to_instantiate}: {time.time() - start_time:.2f} seconds")
     print(fitness_val)

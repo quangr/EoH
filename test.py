@@ -1,8 +1,5 @@
 import os # Import the os module to access environment variables
 from eoh import eoh
-from eoh.utils.getParas import Paras
-from packing import PackingCONST
-# Parameter initilization #
 from eoh.utils.tyroParas import TyroParas
 import tyro
 
@@ -22,14 +19,14 @@ if __name__ == "__main__":
 
     programmatic_defaults = TyroParas(
         method="eoh",
-        problem="packing_const",
+        problem="ssscsp_all",
         llm_api_endpoint="openrouter.ai",
         llm_api_key=llm_api_key_value, # Use the value from the environment variable        
         llm_model="google/gemini-2.0-flash-001",
-        # llm_model="google/gemini-2.5-flash-preview-05-20",
-        # llm_model="google/gemini-2.0-flash-lite-001",
+        # llm_model="google/gemini-2.5-flash",
+        # llm_model="google/gemini-2.5-flash-lite",
         ec_pop_size=5, # number of samples in each population
-        ec_n_pop=5,  # number of populations
+        ec_n_pop=10,  # number of populations
         exp_n_proc=20,  # multi-core parallel
         exp_debug_mode=False,
         # Any other parameters you want to set as a default baseline
